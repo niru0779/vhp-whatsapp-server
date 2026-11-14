@@ -146,11 +146,11 @@ async function startWhatsApp() {
             defaultQueryTimeoutMs: 60000,
             keepAliveIntervalMs: 10000,
             getMessage: async (key) => {
-                const stored = messageStore.get(key.id);
-                if (stored?.message) return stored.message;
+                if (key?.id && messageStore.has(key.id)) {
+                    return messageStore.get(key.id);
+                }
                 return undefined;
             }
-        });
         });
 
         sock.ev.on('creds.update', async () => {
@@ -211,7 +211,8 @@ async function startWhatsApp() {
                 const remoteJid = msg.key.remoteJid || '';
                 if (remoteJid.includes('@broadcast') || remoteJid.includes('@g.us')) continue;
 
-                const senderPhone = remoteJid.replace('@s.whatsapp.net', '').replace('@c.us', '');
+                // Strip @domain and :device_id to get pure phone digits
+                const senderPhone = remoteJid.split('@')[0].split(':')[0].replace(/\D/g, '');
                 const text = msg.message?.conversation 
                           || msg.message?.extendedTextMessage?.text 
                           || msg.message?.imageMessage?.caption 
@@ -255,17 +256,20 @@ async function startWhatsApp() {
 
                         console.log('🤖 वर्डप्रेस बॉट उत्तर:', resJson?.reply ? 'रिप्लाई मिला' : 'कोई रिप्लाई नहीं');
 
+                        // Normalize target JID (always use master user JID without device IDs)
+                        const targetJid = `${senderPhone}@s.whatsapp.net`;
+
                         if (resJson && resJson.reply) {
-                            await safeSendMessage(remoteJid, resJson.reply);
+                            await safeSendMessage(targetJid, resJson.reply);
                             console.log(`📤 सदस्य (+${senderPhone}) को उत्तर भेज दिया गया!`);
                         }
 
-                        // Also send separate OTP message to the registered member with 1.5s delay to prevent E2EE ratchet clash
+                        // Also send separate OTP message to the registered member with 2.5s delay to prevent E2EE ratchet clash
                         if (resJson && resJson.otp_phone && resJson.otp_message) {
                             let cleanOtp = String(resJson.otp_phone).replace(/\D/g, '');
                             if (cleanOtp.length === 10) cleanOtp = '91' + cleanOtp;
                             const otpJid = `${cleanOtp}@s.whatsapp.net`;
-                            await new Promise(r => setTimeout(r, 1500));
+                            await new Promise(r => setTimeout(r, 2500));
                             await safeSendMessage(otpJid, resJson.otp_message);
                             console.log(`🔐 पंजीकृत मोबाइल (+${cleanOtp}) पर अलग से सुरक्षा OTP संदेश भेज दिया गया!`);
                         }
@@ -285,8 +289,8 @@ async function startWhatsApp() {
 async function safeSendMessage(jid, text) {
     if (!sock) return null;
     const sent = await sock.sendMessage(jid, { text });
-    if (sent?.key?.id) {
-        messageStore.set(sent.key.id, sent);
+    if (sent?.key?.id && sent.message) {
+        messageStore.set(sent.key.id, sent.message);
         if (messageStore.size > 2000) {
             const firstKey = messageStore.keys().next().value;
             messageStore.delete(firstKey);

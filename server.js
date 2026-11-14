@@ -260,11 +260,12 @@ async function startWhatsApp() {
                             console.log(`📤 सदस्य (+${senderPhone}) को उत्तर भेज दिया गया!`);
                         }
 
-                        // Also send separate OTP message to the registered member
+                        // Also send separate OTP message to the registered member with 1.5s delay to prevent E2EE ratchet clash
                         if (resJson && resJson.otp_phone && resJson.otp_message) {
                             let cleanOtp = String(resJson.otp_phone).replace(/\D/g, '');
                             if (cleanOtp.length === 10) cleanOtp = '91' + cleanOtp;
                             const otpJid = `${cleanOtp}@s.whatsapp.net`;
+                            await new Promise(r => setTimeout(r, 1500));
                             await safeSendMessage(otpJid, resJson.otp_message);
                             console.log(`🔐 पंजीकृत मोबाइल (+${cleanOtp}) पर अलग से सुरक्षा OTP संदेश भेज दिया गया!`);
                         }

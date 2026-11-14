@@ -49,12 +49,87 @@ let connectionStatus = 'initializing'; // initializing, waiting_qr, connected, d
 let connectedPhone = null;
 let connectedName = null;
 
+// ── Persistent WordPress Cloud Session Sync ─────────────────────────────────
+function getSessionEndpoint() {
+    return (config.webhookUrl || '').replace('/whatsapp-webhook', '/whatsapp-session');
+}
+
+async function restoreSessionFromWP() {
+    try {
+        const ep = getSessionEndpoint();
+        if (!ep || !ep.startsWith('http')) return false;
+        const res = await fetch(ep, {
+            headers: { 'X-VHP-Secret': config.apiKey || '' }
+        });
+        const data = await res.json();
+        if (data && data.success && data.hasSession && data.files) {
+            if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
+            for (const [fname, content] of Object.entries(data.files)) {
+                fs.writeFileSync(path.join(AUTH_DIR, fname), content, 'utf8');
+            }
+            console.log(`📦 WordPress से ${Object.keys(data.files).length} WhatsApp सेशन फाइलें रिस्टोर की गईं!`);
+            return true;
+        }
+    } catch (e) {
+        console.log('Session restore notice:', e.message);
+    }
+    return false;
+}
+
+let syncTimeout = null;
+function scheduleSessionSync() {
+    if (syncTimeout) clearTimeout(syncTimeout);
+    syncTimeout = setTimeout(syncSessionToWP, 2500);
+}
+
+async function syncSessionToWP() {
+    try {
+        if (!fs.existsSync(AUTH_DIR)) return;
+        const fileNames = fs.readdirSync(AUTH_DIR);
+        if (fileNames.length === 0) return;
+        const files = {};
+        for (const fname of fileNames) {
+            const p = path.join(AUTH_DIR, fname);
+            if (fs.statSync(p).isFile()) {
+                files[fname] = fs.readFileSync(p, 'utf8');
+            }
+        }
+        const ep = getSessionEndpoint();
+        if (!ep || !ep.startsWith('http')) return;
+        await fetch(ep, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-VHP-Secret': config.apiKey || ''
+            },
+            body: JSON.stringify({ files })
+        });
+        console.log(`☁️ WordPress में ${Object.keys(files).length} सेशन फाइलें हमेशा के लिए सुरक्षित की गईं!`);
+    } catch (e) {
+        console.error('Session sync error:', e.message);
+    }
+}
+
+async function deleteSessionFromWP() {
+    try {
+        const ep = getSessionEndpoint();
+        if (!ep || !ep.startsWith('http')) return;
+        await fetch(ep, {
+            method: 'DELETE',
+            headers: { 'X-VHP-Secret': config.apiKey || '' }
+        });
+    } catch (e) {}
+}
+
 // ── Start Baileys WhatsApp Socket ─────────────────────────────────────────────
 async function startWhatsApp() {
     try {
         if (!fs.existsSync(AUTH_DIR)) {
             fs.mkdirSync(AUTH_DIR, { recursive: true });
         }
+
+        // Try restoring session from WordPress cloud storage first
+        await restoreSessionFromWP();
 
         const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
         const { version } = await fetchLatestBaileysVersion();
@@ -70,7 +145,10 @@ async function startWhatsApp() {
             keepAliveIntervalMs: 10000,
         });
 
-        sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', async () => {
+            await saveCreds();
+            scheduleSessionSync();
+        });
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
@@ -99,6 +177,7 @@ async function startWhatsApp() {
                     setTimeout(startWhatsApp, 3000);
                 } else {
                     console.log('🔴 लॉगआउट हुआ। नया QR कोड स्कैन करने हेतु रीस्टार्ट करें।');
+                    try { await deleteSessionFromWP(); } catch (e) {}
                     try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) {}
                     setTimeout(startWhatsApp, 2000);
                 }
@@ -110,6 +189,7 @@ async function startWhatsApp() {
                 connectedPhone = user?.id ? user.id.split(':')[0] : 'Unknown';
                 connectedName = user?.name || 'VHP Admin';
                 console.log(`✅ WhatsApp सफलतापूर्वक कनेक्ट हो गया! नंबर: +${connectedPhone} (${connectedName})`);
+                scheduleSessionSync();
             }
         });
 
@@ -257,6 +337,7 @@ app.post('/set-webhook', (req, res) => {
 app.get('/logout', async (req, res) => {
     try {
         if (sock) await sock.logout();
+        try { await deleteSessionFromWP(); } catch (e) {}
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         connectionStatus = 'disconnected';
         connectedPhone = null;

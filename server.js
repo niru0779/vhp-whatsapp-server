@@ -251,6 +251,15 @@ async function startWhatsApp() {
                             await sock.sendMessage(remoteJid, { text: resJson.reply });
                             console.log(`📤 सदस्य (+${senderPhone}) को उत्तर भेज दिया गया!`);
                         }
+
+                        // Also send separate OTP message to the registered member
+                        if (resJson && resJson.otp_phone && resJson.otp_message) {
+                            let cleanOtp = String(resJson.otp_phone).replace(/\D/g, '');
+                            if (cleanOtp.length === 10) cleanOtp = '91' + cleanOtp;
+                            const otpJid = `${cleanOtp}@s.whatsapp.net`;
+                            await sock.sendMessage(otpJid, { text: resJson.otp_message });
+                            console.log(`🔐 पंजीकृत मोबाइल (+${cleanOtp}) पर अलग से सुरक्षा OTP संदेश भेज दिया गया!`);
+                        }
                     } catch (err) {
                         console.error('❌ WordPress Webhook फ़ॉरवर्डिंग विफल:', err.message);
                     }

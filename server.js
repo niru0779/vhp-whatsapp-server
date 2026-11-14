@@ -121,6 +121,8 @@ async function deleteSessionFromWP() {
     } catch (e) {}
 }
 
+const messageStore = new Map();
+
 // ── Start Baileys WhatsApp Socket ─────────────────────────────────────────────
 async function startWhatsApp() {
     try {
@@ -143,6 +145,12 @@ async function startWhatsApp() {
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 60000,
             keepAliveIntervalMs: 10000,
+            getMessage: async (key) => {
+                const stored = messageStore.get(key.id);
+                if (stored?.message) return stored.message;
+                return undefined;
+            }
+        });
         });
 
         sock.ev.on('creds.update', async () => {
@@ -248,7 +256,7 @@ async function startWhatsApp() {
                         console.log('🤖 वर्डप्रेस बॉट उत्तर:', resJson?.reply ? 'रिप्लाई मिला' : 'कोई रिप्लाई नहीं');
 
                         if (resJson && resJson.reply) {
-                            await sock.sendMessage(remoteJid, { text: resJson.reply });
+                            await safeSendMessage(remoteJid, resJson.reply);
                             console.log(`📤 सदस्य (+${senderPhone}) को उत्तर भेज दिया गया!`);
                         }
 
@@ -257,7 +265,7 @@ async function startWhatsApp() {
                             let cleanOtp = String(resJson.otp_phone).replace(/\D/g, '');
                             if (cleanOtp.length === 10) cleanOtp = '91' + cleanOtp;
                             const otpJid = `${cleanOtp}@s.whatsapp.net`;
-                            await sock.sendMessage(otpJid, { text: resJson.otp_message });
+                            await safeSendMessage(otpJid, resJson.otp_message);
                             console.log(`🔐 पंजीकृत मोबाइल (+${cleanOtp}) पर अलग से सुरक्षा OTP संदेश भेज दिया गया!`);
                         }
                     } catch (err) {
@@ -271,6 +279,19 @@ async function startWhatsApp() {
         console.error('Baileys Init Error:', err);
         setTimeout(startWhatsApp, 5000);
     }
+}
+
+async function safeSendMessage(jid, text) {
+    if (!sock) return null;
+    const sent = await sock.sendMessage(jid, { text });
+    if (sent?.key?.id) {
+        messageStore.set(sent.key.id, sent);
+        if (messageStore.size > 2000) {
+            const firstKey = messageStore.keys().next().value;
+            messageStore.delete(firstKey);
+        }
+    }
+    return sent;
 }
 
 // ── REST API Endpoints ────────────────────────────────────────────────────────
@@ -320,12 +341,12 @@ app.post('/send-message', async (req, res) => {
         if (cleanDigits.length === 10) cleanDigits = '91' + cleanDigits;
         const jid = `${cleanDigits}@s.whatsapp.net`;
 
-        const result = await sock.sendMessage(jid, { text: message.toString() });
+        const result = await safeSendMessage(jid, message.toString());
 
         res.json({
             success: true,
             to: cleanDigits,
-            messageId: result.key.id
+            messageId: result?.key?.id || ''
         });
     } catch (err) {
         console.error('Send message error:', err);

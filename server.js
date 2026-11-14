@@ -49,6 +49,15 @@ let connectionStatus = 'initializing'; // initializing, waiting_qr, connected, d
 let connectedPhone = null;
 let connectedName = null;
 
+const activityLogs = [];
+function logActivity(msg) {
+    const time = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
+    const line = `[${time}] ${msg}`;
+    console.log(line);
+    activityLogs.push(line);
+    if (activityLogs.length > 200) activityLogs.shift();
+}
+
 // ── Persistent WordPress Cloud Session Sync ─────────────────────────────────
 function getSessionEndpoint() {
     return (config.webhookUrl || '').replace('/whatsapp-webhook', '/whatsapp-session');
@@ -220,7 +229,7 @@ async function startWhatsApp() {
 
                 if (!text || !text.trim()) continue;
 
-                console.log(`📩 नया मैसेज आया (+${senderPhone}): "${text.trim()}"`);
+                logActivity(`📩 नया मैसेज आया (${remoteJid}): "${text.trim()}"`);
 
                 // Forward to WordPress Webhook
                 if (config.webhookUrl) {
@@ -254,26 +263,24 @@ async function startWhatsApp() {
                             }
                         }
 
-                        console.log('🤖 वर्डप्रेस बॉट उत्तर:', resJson?.reply ? 'रिप्लाई मिला' : 'कोई रिप्लाई नहीं');
-
-                        // Normalize target JID (always use master user JID without device IDs)
-                        const targetJid = `${senderPhone}@s.whatsapp.net`;
+                        logActivity(`🤖 वर्डप्रेस बॉट उत्तर: ${resJson?.reply ? 'रिप्लाई मिला' : 'कोई रिप्लाई नहीं'}`);
 
                         if (resJson && resJson.reply) {
-                            await safeSendMessage(targetJid, resJson.reply);
-                            console.log(`📤 सदस्य (+${senderPhone}) को उत्तर भेज दिया गया!`);
+                            await safeSendMessage(remoteJid, resJson.reply);
+                            logActivity(`📤 चैट (${remoteJid}) में उत्तर भेजा गया`);
                         }
 
-                        // Also send separate OTP message to the registered member with 2.5s delay to prevent E2EE ratchet clash
+                        // Also send separate OTP message to the registered member with 2s delay
                         if (resJson && resJson.otp_phone && resJson.otp_message) {
                             let cleanOtp = String(resJson.otp_phone).replace(/\D/g, '');
                             if (cleanOtp.length === 10) cleanOtp = '91' + cleanOtp;
                             const otpJid = `${cleanOtp}@s.whatsapp.net`;
-                            await new Promise(r => setTimeout(r, 2500));
+                            await new Promise(r => setTimeout(r, 2000));
                             await safeSendMessage(otpJid, resJson.otp_message);
-                            console.log(`🔐 पंजीकृत मोबाइल (+${cleanOtp}) पर अलग से सुरक्षा OTP संदेश भेज दिया गया!`);
+                            logActivity(`🔐 पंजीकृत मोबाइल (+${cleanOtp}) पर अलग से सुरक्षा OTP भेजा गया`);
                         }
                     } catch (err) {
+                        logActivity(`❌ WordPress Webhook फ़ॉरवर्डिंग विफल: ${err.message}`);
                         console.error('❌ WordPress Webhook फ़ॉरवर्डिंग विफल:', err.message);
                     }
                 }
@@ -287,19 +294,37 @@ async function startWhatsApp() {
 }
 
 async function safeSendMessage(jid, text) {
-    if (!sock) return null;
-    const sent = await sock.sendMessage(jid, { text });
-    if (sent?.key?.id && sent.message) {
-        messageStore.set(sent.key.id, sent.message);
-        if (messageStore.size > 2000) {
-            const firstKey = messageStore.keys().next().value;
-            messageStore.delete(firstKey);
-        }
+    if (!sock) {
+        logActivity('❌ safeSendMessage: sock is null');
+        return null;
     }
-    return sent;
+    try {
+        const sent = await sock.sendMessage(jid, { text });
+        if (sent?.key?.id && sent.message) {
+            messageStore.set(sent.key.id, sent.message);
+            if (messageStore.size > 2000) {
+                const firstKey = messageStore.keys().next().value;
+                messageStore.delete(firstKey);
+            }
+        }
+        return sent;
+    } catch (err) {
+        logActivity(`❌ safeSendMessage Error to ${jid}: ${err.message}`);
+        console.error(`safeSendMessage Error to ${jid}:`, err);
+        return null;
+    }
 }
 
 // ── REST API Endpoints ────────────────────────────────────────────────────────
+
+// 0. Live Activity Logs
+app.get('/logs', (req, res) => {
+    res.json({
+        success: true,
+        count: activityLogs.length,
+        logs: activityLogs
+    });
+});
 
 // 1. Connection status
 app.get('/status', (req, res) => {

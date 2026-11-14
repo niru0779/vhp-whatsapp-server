@@ -153,7 +153,18 @@ async function startWhatsApp() {
                             body: JSON.stringify(payload)
                         });
 
-                        const resJson = await response.json();
+                        const rawText = await response.text();
+                        let resJson = null;
+                        try {
+                            const cleanText = rawText.trim().replace(/^\ufeff/, '');
+                            resJson = JSON.parse(cleanText);
+                        } catch (e1) {
+                            const jsonMatch = rawText.match(/\{[\s\S]*?\}(?=\s*\{|$)/);
+                            if (jsonMatch) {
+                                try { resJson = JSON.parse(jsonMatch[0].replace(/^\ufeff/, '')); } catch (e2) {}
+                            }
+                        }
+
                         console.log('🤖 वर्डप्रेस बॉट उत्तर:', resJson?.reply ? 'रिप्लाई मिला' : 'कोई रिप्लाई नहीं');
 
                         if (resJson && resJson.reply) {

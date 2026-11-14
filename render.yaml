@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: vhp-whatsapp-gateway
+    env: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 3000

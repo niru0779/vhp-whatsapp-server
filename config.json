@@ -1,0 +1,4 @@
+{
+  "webhookUrl": "https://vishwahindiparishad.in/wp-json/vhpm/v1/whatsapp-webhook",
+  "apiKey": "vhp_wa_secret_2026"
+}
